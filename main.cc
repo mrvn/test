@@ -163,9 +163,88 @@ void blink(uint32_t time) {
 	delay(time);
 }
 
+static uint32_t panic_delay = 0x10000;
+
 void panic() {
     while(true) {
-	blink(0x10000);
+	blink(panic_delay);
+    }
+}
+
+
+/**********************************************************************
+ * MMU                                                                *
+ **********************************************************************/
+namespace MMU {
+#define CACHED_TLB
+//#undef CACHED_TLB
+
+    static volatile __attribute__ ((aligned (0x4000))) uint32_t page_table[4096];
+
+    void init(void) {
+	uint32_t base;
+	for (base = 0; base < 4; base++) {
+	    // section descriptor (1 MB)
+#ifdef CACHED_TLB
+	    // outer and inner write back, write allocate, not shareable (fast
+	    // but unsafe)
+	    // page_table[base] = base << 20 | 0x0140E;
+	    // outer and inner write back, write allocate, shareable (fast but
+	    // unsafe)
+	    page_table[base] = base << 20 | 0x1140E;
+#else
+	    // outer and inner write through, no write allocate, shareable
+	    // (safe but slower)
+	    page_table[base] = base << 20 | 0x1040A;
+#endif
+	}
+	// unused up to 0x3F000000
+	for (; base < 1024 - 16; base++) {
+	    page_table[base] = 0;
+	}
+	// 16 MB peripherals
+	for (; base < 1024; base++) {
+	    // shared device, never execute
+	    page_table[base] = base << 20 | 0x10416;
+	}
+	// 3G unused
+	for (; base < 4096; base++) {
+	    page_table[base] = 0;
+	}
+
+	// set SMP bit in ACTLR
+	uint32_t auxctrl;
+	asm volatile ("mrc p15, 0, %0, c1, c0,  1" : "=r" (auxctrl));
+	auxctrl |= 1 << 6;
+	asm volatile ("mcr p15, 0, %0, c1, c0,  1" :: "r" (auxctrl));
+
+	// set domain 0 to client
+	asm volatile ("mcr p15, 0, %0, c3, c0, 0" :: "r" (1));
+
+	// always use TTBR0
+	asm volatile ("mcr p15, 0, %0, c2, c0, 2" :: "r" (0));
+
+#ifdef CACHED_TLB
+	// set TTBR0 (page table walk inner and outer write-back,
+	// write-allocate, cacheable, shareable memory)
+	asm volatile ("mcr p15, 0, %0, c2, c0, 0"
+		      :: "r" (0b101010 | (unsigned) &page_table));
+#else
+	// set TTBR0 (page table walk inner and outer non-cacheable,
+	// non-shareable memory)
+	asm volatile ("mcr p15, 0, %0, c2, c0, 0"
+		      :: "r" (0 | (unsigned) &page_table));
+#endif
+	asm volatile ("isb" ::: "memory");
+
+	// enable MMU, caches and branch prediction in SCTLR
+	uint32_t mode;
+	asm volatile ("mrc p15, 0, %0, c1, c0, 0" : "=r" (mode));
+	mode |= 0x1805;
+	asm volatile ("mcr p15, 0, %0, c1, c0, 0" :: "r" (mode) : "memory");
+
+	// instruction cache makes delay way faster, slow panic down
+	panic_delay *= 0x200;
     }
 }
 
@@ -182,6 +261,8 @@ void kernel_main(uint32_t r0, uint32_t model_id, void *atags) {
     UART::init();
     puts("\nHello\n");
     delay(0x100000);
+
+    MMU::init();
     
     panic();
 }
