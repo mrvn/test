@@ -384,10 +384,9 @@ namespace MMU {
 	 */
 
 	// outer and inner write back, write allocate, shareable
-	// 0b0101 0100 0111
-	//leaf_table[slot] = phys_addr | 0x547;
-
-	// 0b0101 0101 0111 need AP[0] despite AFE==1
+	// set accessed bit or the first access gives a fault
+	// RPi/RPi2 do not have hardware support for accessed
+	// 0b0101 0101 0111
 	leaf_table[slot] = phys_addr | 0x557;
 	tripple_barrier();
     }
