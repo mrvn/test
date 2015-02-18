@@ -53,6 +53,12 @@ SECTIONS
         *(.bss)
     }
     . = ALIGN(4096); /* align to page size */
+    /* add some pages of free memory, up to the 4MB boundary */
+    _mem_start = .;
+    . = ALIGN(4096 * 1024); /* align to 4MB */
+    _mem_end = .;
+
+    . = ALIGN(4096); /* align to page size */
     _bss_end = .;
     
     _end = .;
