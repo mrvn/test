@@ -180,9 +180,11 @@ namespace MMU {
 //#undef CACHED_TLB
 
     static volatile __attribute__ ((aligned (0x4000))) uint32_t page_table[4096];
+    static volatile __attribute__ ((aligned (0x400))) uint32_t leaf_table[256];
 
     void init(void) {
 	uint32_t base;
+	// initialize page_table
 	for (base = 0; base < 4; base++) {
 	    // section descriptor (1 MB)
 #ifdef CACHED_TLB
@@ -198,6 +200,8 @@ namespace MMU {
 	    page_table[base] = base << 20 | 0x1040A;
 #endif
 	}
+	// one second level page tabel (leaf table)
+	page_table[base++] = (intptr_t)leaf_table | 0x10409;
 	// unused up to 0x3F000000
 	for (; base < 1024 - 16; base++) {
 	    page_table[base] = 0;
@@ -210,6 +214,11 @@ namespace MMU {
 	// 3G unused
 	for (; base < 4096; base++) {
 	    page_table[base] = 0;
+	}
+
+	// initialize leaf_table
+	for (base = 0; base < 256; base++) {
+	    leaf_table[base] = 0;
 	}
 
 	// set SMP bit in ACTLR
@@ -237,10 +246,48 @@ namespace MMU {
 #endif
 	asm volatile ("isb" ::: "memory");
 
+	/* SCTLR
+	 * Bit 31: SBZ     reserved
+	 * Bit 30: TE      Thumb Exception enable (0 - take in ARM state)
+	 * Bit 29: AFE     Access flag enable (1 - simplified model)
+	 * Bit 28: TRE     TEX remap enable (0 - no TEX remapping)
+	 * Bit 27: NMFI    Non-Maskable FIQ (read-only)
+	 * Bit 26: 0       reserved
+	 * Bit 25: EE      Exception Endianness (0 - little-endian)
+	 * Bit 24: VE      Interrupt Vectors Enable (0 - use vector table)
+	 * Bit 23: 1       reserved
+	 * Bit 22: 1/U     (alignment model)
+	 * Bit 21: FI      Fast interrupts (probably read-only)
+	 * Bit 20: UWXN    (Virtualization extension)
+	 * Bit 19: WXN     (Virtualization extension)
+	 * Bit 18: 1       reserved
+	 * Bit 17: HA      Hardware access flag enable (0 - enable)
+	 * Bit 16: 1       reserved
+	 * Bit 15: 0       reserved
+	 * Bit 14: RR      Round Robin select (0 - normal replacement strategy)
+	 * Bit 13: V       Vectors bit (0 - remapped base address)
+	 * Bit 12: I       Instruction cache enable (1 - enable)
+	 * Bit 11: Z       Branch prediction enable (1 - enable)
+	 * Bit 10: SW      SWP/SWPB enable (maybe RAZ/WI)
+	 * Bit 09: 0       reserved
+	 * Bit 08: 0       reserved
+	 * Bit 07: 0       endian support / RAZ/SBZP
+	 * Bit 06: 1       reserved
+	 * Bit 05: CP15BEN DMB/DSB/ISB enable (1 - enable)
+	 * Bit 04: 1       reserved
+	 * Bit 03: 1       reserved
+	 * Bit 02: C       Cache enable (1 - data and unified caches enabled)
+	 * Bit 01: A       Alignment check enable (1 - fault when unaligned)
+	 * Bit 00: M       MMU enable (1 - enable)
+	 */
+	
 	// enable MMU, caches and branch prediction in SCTLR
 	uint32_t mode;
 	asm volatile ("mrc p15, 0, %0, c1, c0, 0" : "=r" (mode));
-	mode |= 0x1805;
+	// mask: 0b0111 0011 0000 0010 0111 1000 0010 0111
+	// bits: 0b0010 0000 0000 0000 0001 1000 0010 0111
+	mode &= 0x73027827;
+	mode |= 0x20001827;
 	asm volatile ("mcr p15, 0, %0, c1, c0, 0" :: "r" (mode) : "memory");
 
 	// instruction cache makes delay way faster, slow panic down
