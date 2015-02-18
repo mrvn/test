@@ -176,11 +176,20 @@ void panic() {
  * MMU                                                                *
  **********************************************************************/
 namespace MMU {
-//#define CACHED_TLB
-#undef CACHED_TLB
+#define CACHED_TLB
+//#undef CACHED_TLB
 
     static volatile __attribute__ ((aligned (0x4000))) uint32_t page_table[4096];
     static volatile __attribute__ ((aligned (0x400))) uint32_t leaf_table[256];
+
+    struct page {
+	uint8_t data[4096];
+    };
+
+    extern "C" {
+	extern page _mem_start[];
+	extern page _mem_end[];
+    }
 
     void init(void) {
 	uint32_t base;
@@ -201,25 +210,40 @@ namespace MMU {
 	    page_table[base] = base << 20 | 0x1040A;
 #endif
 	}
-	// one second level page tabel (leaf table)
-	page_table[base] = (intptr_t)leaf_table | 0x1;
+
+	// one second level page tabel (leaf table) at 0x00400000
+	page_table[base++] = (intptr_t)leaf_table | 0x1;
+
 	// unused up to 0x3F000000
 	for (; base < 1024 - 16; base++) {
 	    page_table[base] = 0;
 	}
-	// 16 MB peripherals
+
+	// 16 MB peripherals at 0x3F000000
 	for (; base < 1024; base++) {
 	    // shared device, never execute
 	    page_table[base] = base << 20 | 0x10416;
 	}
+
 	// 3G unused
 	for (; base < 4096; base++) {
 	    page_table[base] = 0;
 	}
 
 	// initialize leaf_table
+	//page *p = (page *)_mem_start;
+	page *p = (page *)0x400000;
 	for (base = 0; base < 256; base++) {
-	    leaf_table[base] = 0;
+	    // empty
+	    // leaf_table[base] = 0;
+
+	    // populate with memory
+	    // outer and inner write back, write allocate, shareable
+	    // 0b0101 0100 0111
+	    // leaf_table[base] = (intptr_t)p++ | 0x547;
+
+	    // strictly ordered, not cached
+	    leaf_table[base] = (intptr_t)p++ | 0x2;
 	}
 
 	// set SMP bit in ACTLR
@@ -227,6 +251,11 @@ namespace MMU {
 	asm volatile ("mrc p15, 0, %0, c1, c0,  1" : "=r" (auxctrl));
 	auxctrl |= 1 << 6;
 	asm volatile ("mcr p15, 0, %0, c1, c0,  1" :: "r" (auxctrl));
+
+        // setup domains (CP15 c3)
+	// Write Domain Access Control Register
+        // use access permissions from TLB entry
+	asm volatile ("mcr     p15, 0, %0, c3, c0, 0" :: "r" (0x55555555));
 
 	// set domain 0 to client
 	asm volatile ("mcr p15, 0, %0, c3, c0, 0" :: "r" (1));
@@ -302,15 +331,6 @@ namespace MMU {
 	// panic_delay *= 0x200;
     }
 
-    struct page {
-	uint8_t data[4096];
-    };
-
-    extern "C" {
-	extern page _mem_start[];
-	extern page _mem_end[];
-    }
-
     void tripple_barrier() {
 	asm volatile ("isb" ::: "memory");
 	asm volatile ("dmb" ::: "memory");
@@ -334,7 +354,7 @@ namespace MMU {
 	 * Bit 04: AP[0]   0 - access flag
 	 * Bit 03: C       0
 	 * Bit 02: B       1
-	 * Bit 01: 1       1
+	 * Bit 01: 1       1 (small page)
 	 * Bit 00: XN      execute never (1 - not executable)
 	 *
 	 * TEX C B | Description               | Memory type      | Shareable
@@ -406,11 +426,11 @@ void kernel_main(uint32_t r0, uint32_t model_id, void *atags) {
     MMU::page *p = (MMU::page*)MMU::_mem_start;
     for(uint32_t slot = 0; slot < 256; ++slot) {
 	blink(panic_delay * 4);
-	MMU::map(slot, (intptr_t)p);
+	//MMU::map(slot, (intptr_t)p);
 	MMU::page *virt = &((MMU::page *)0x400000)[slot];
 	// writing to page faults
 	virt->data[0] = 0;
-	MMU::unmap(slot);
+	//MMU::unmap(slot);
 	++p;
     }
     
