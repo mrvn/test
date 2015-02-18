@@ -34,6 +34,11 @@ SECTIONS
     .rodata : {
 	*(.rodata)
     }
+    .init_array : {
+    	_init_array_start = .;
+	*(.init_array)
+    	_init_array_end = .;
+    }
     . = ALIGN(4096); /* align to page size */
     _rodata_end = .;
     _data_start = .;

@@ -1,23 +1,29 @@
-OBJS := mmu.o
+OBJS := boot.o main.o
 
-all: mmu.img
+CFLAGS := -O2 -W -Wall -fPIE
+CFLAGS += -march=armv7-a -mfloat-abi=hard -mfpu=vfpv3-d16
+CFLAGS += -ffreestanding -nostdlib
+CXXFLAGS := $(CFLAGS) -std=gnu++11 -fno-exceptions
+CFLAGS += -std=gnu99
+LDFLAGS := -fPIE -nostdlib
 
-mmu.img: mmu.elf
+all: kernel.img
+
+kernel.img: kernel.elf
 	arm-none-eabi-objcopy $< -O binary $@
 
-mmu.elf: link-arm-eabi.ld $(OBJS)
-	arm-none-eabi-ld $(OBJS) -Tlink-arm-eabi.ld -o $@
+kernel.elf: link-arm-eabi.ld $(OBJS)
+	arm-none-eabi-g++ $(LDFLAGS) $(OBJS) -Tlink-arm-eabi.ld -o $@
 
-%.o: %.S
-	arm-none-eabi-gcc -march=armv7-a -mfloat-abi=hard \
-	                  -mfpu=vfpv3-d16 -ffreestanding -nostdlib \
-	                  -c -o $@ $<
+%.o: %.S Makefile
+	arm-none-eabi-gcc $(CFLAGS) -c -o $@ $<
 
-install:
-	sudo mount /dev/sdi1 /mnt/usb1
-	sudo cp mmu.img /mnt/usb1/kernel7.img
-	sudo umount /mnt/usb1
+%.o: %.c Makefile
+	arm-none-eabi-gcc $(CFLAGS) -c -o $@ $<
+
+%.o: %.cc Makefile
+	arm-none-eabi-g++ $(CXXFLAGS) -c -o $@ $<
 
 clean:
-	rm -f mmu.img mmu.elf mmu.o
+	rm -f kernel.img kernel.elf $(OBJS)
 
