@@ -231,19 +231,8 @@ namespace MMU {
 	}
 
 	// initialize leaf_table
-	//page *p = (page *)_mem_start;
-	page *p = (page *)0x400000;
 	for (base = 0; base < 256; base++) {
-	    // empty
-	    // leaf_table[base] = 0;
-
-	    // populate with memory
-	    // outer and inner write back, write allocate, shareable
-	    // 0b0101 0100 0111
-	    // leaf_table[base] = (intptr_t)p++ | 0x547;
-
-	    // strictly ordered, not cached
-	    leaf_table[base] = (intptr_t)p++ | 0x2;
+	    leaf_table[base] = 0;
 	}
 
 	// set SMP bit in ACTLR
@@ -266,12 +255,12 @@ namespace MMU {
 #ifdef CACHED_TLB
 	// set TTBR0 (page table walk inner and outer write-back,
 	// write-allocate, cacheable, shareable memory)
-//	asm volatile ("mcr p15, 0, %0, c2, c0, 0"
-//		      :: "r" (0b1001010 | (unsigned) &page_table));
+	asm volatile ("mcr p15, 0, %0, c2, c0, 0"
+		      :: "r" (0b1001010 | (unsigned) &page_table));
 	// set TTBR0 (page table walk inner and outer write-back,
 	// write-allocate, cacheable, non-shareable memory)
-	asm volatile ("mcr p15, 0, %0, c2, c0, 0"
-		      :: "r" (0b1101010 | (unsigned) &page_table));
+	//asm volatile ("mcr p15, 0, %0, c2, c0, 0"
+	//	      :: "r" (0b1101010 | (unsigned) &page_table));
 #else
 	// set TTBR0 (page table walk inner and outer non-cacheable,
 	// non-shareable memory)
@@ -320,15 +309,20 @@ namespace MMU {
 	asm volatile ("mrc p15, 0, %0, c1, c0, 0" : "=r" (mode));
 	// mask: 0b0111 0011 0000 0010 0111 1000 0010 0111
 	// bits: 0b0010 0000 0000 0000 0001 1000 0010 0111
-	//mode &= 0x73027827;
-	//mode |= 0x20001827;
+#ifdef CACHED_TLB
+	mode &= 0x73027827;
+	mode |= 0x20001827;
+#else
 	// no caches
 	mode &= 0x73027827;
 	mode |= 0x20000023;
+#endif
 	asm volatile ("mcr p15, 0, %0, c1, c0, 0" :: "r" (mode) : "memory");
 
 	// instruction cache makes delay way faster, slow panic down
-	// panic_delay *= 0x200;
+#ifdef CACHED_TLB
+	panic_delay *= 0x200;
+#endif
     }
 
     void tripple_barrier() {
@@ -391,7 +385,10 @@ namespace MMU {
 
 	// outer and inner write back, write allocate, shareable
 	// 0b0101 0100 0111
-	leaf_table[slot] = phys_addr | 0x547;
+	//leaf_table[slot] = phys_addr | 0x547;
+
+	// 0b0101 0101 0111 need AP[0] despite AFE==1
+	leaf_table[slot] = phys_addr | 0x557;
 	tripple_barrier();
     }
 
@@ -423,17 +420,21 @@ void kernel_main(uint32_t r0, uint32_t model_id, void *atags) {
 
     MMU::init();
 
+    puts("mapping and cleaning memory");
     MMU::page *p = (MMU::page*)MMU::_mem_start;
     for(uint32_t slot = 0; slot < 256; ++slot) {
-	blink(panic_delay * 4);
-	//MMU::map(slot, (intptr_t)p);
+	if (slot % 32 == 0) putc('\n');
+	putc('.');
+	blink(panic_delay);
+	MMU::map(slot, (intptr_t)p);
 	MMU::page *virt = &((MMU::page *)0x400000)[slot];
 	// writing to page faults
 	virt->data[0] = 0;
-	//MMU::unmap(slot);
+	MMU::unmap(slot);
 	++p;
     }
-    
+
+    puts("\ndone\n");
     panic();
 }
 
