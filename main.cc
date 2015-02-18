@@ -176,8 +176,8 @@ void panic() {
  * MMU                                                                *
  **********************************************************************/
 namespace MMU {
-#define CACHED_TLB
-//#undef CACHED_TLB
+//#define CACHED_TLB
+#undef CACHED_TLB
 
     static volatile __attribute__ ((aligned (0x4000))) uint32_t page_table[4096];
     static volatile __attribute__ ((aligned (0x400))) uint32_t leaf_table[256];
@@ -185,15 +185,16 @@ namespace MMU {
     void init(void) {
 	uint32_t base;
 	// initialize page_table
+	// 4MB of kernel memory
 	for (base = 0; base < 4; base++) {
 	    // section descriptor (1 MB)
 #ifdef CACHED_TLB
 	    // outer and inner write back, write allocate, not shareable (fast
 	    // but unsafe)
-	    // page_table[base] = base << 20 | 0x0140E;
+	    page_table[base] = base << 20 | 0x0140E;
 	    // outer and inner write back, write allocate, shareable (fast but
 	    // unsafe)
-	    page_table[base] = base << 20 | 0x1140E;
+	    //page_table[base] = base << 20 | 0x1140E;
 #else
 	    // outer and inner write through, no write allocate, shareable
 	    // (safe but slower)
@@ -201,7 +202,7 @@ namespace MMU {
 #endif
 	}
 	// one second level page tabel (leaf table)
-	page_table[base++] = (intptr_t)leaf_table | 0x10409;
+	page_table[base] = (intptr_t)leaf_table | 0x1;
 	// unused up to 0x3F000000
 	for (; base < 1024 - 16; base++) {
 	    page_table[base] = 0;
@@ -236,8 +237,12 @@ namespace MMU {
 #ifdef CACHED_TLB
 	// set TTBR0 (page table walk inner and outer write-back,
 	// write-allocate, cacheable, shareable memory)
+//	asm volatile ("mcr p15, 0, %0, c2, c0, 0"
+//		      :: "r" (0b1001010 | (unsigned) &page_table));
+	// set TTBR0 (page table walk inner and outer write-back,
+	// write-allocate, cacheable, non-shareable memory)
 	asm volatile ("mcr p15, 0, %0, c2, c0, 0"
-		      :: "r" (0b101010 | (unsigned) &page_table));
+		      :: "r" (0b1101010 | (unsigned) &page_table));
 #else
 	// set TTBR0 (page table walk inner and outer non-cacheable,
 	// non-shareable memory)
@@ -286,12 +291,99 @@ namespace MMU {
 	asm volatile ("mrc p15, 0, %0, c1, c0, 0" : "=r" (mode));
 	// mask: 0b0111 0011 0000 0010 0111 1000 0010 0111
 	// bits: 0b0010 0000 0000 0000 0001 1000 0010 0111
+	//mode &= 0x73027827;
+	//mode |= 0x20001827;
+	// no caches
 	mode &= 0x73027827;
-	mode |= 0x20001827;
+	mode |= 0x20000023;
 	asm volatile ("mcr p15, 0, %0, c1, c0, 0" :: "r" (mode) : "memory");
 
 	// instruction cache makes delay way faster, slow panic down
-	panic_delay *= 0x200;
+	// panic_delay *= 0x200;
+    }
+
+    struct page {
+	uint8_t data[4096];
+    };
+
+    extern "C" {
+	extern page _mem_start[];
+	extern page _mem_end[];
+    }
+
+    void tripple_barrier() {
+	asm volatile ("isb" ::: "memory");
+	asm volatile ("dmb" ::: "memory");
+	asm volatile ("dsb" ::: "memory");
+    }
+    
+    void map(uint32_t slot, uint32_t phys_addr) {
+	tripple_barrier();
+
+	/* second-level descriptor format (small page)
+	 * Bit 31: small page base address
+	 * ...
+	 * Bit 12: small page base address
+	 * Bit 11: nG      not global (0 - global)
+	 * Bit 10: S       shareable (1 - shareable)
+	 * Bit 09: AP[2]   0 (read/write)
+	 * Bit 08: TEX[2]  1
+	 * Bit 07: TEX[1]  0
+	 * Bit 06: TEX[0]  1
+	 * Bit 05: AP[1]   0 (only kernel)
+	 * Bit 04: AP[0]   0 - access flag
+	 * Bit 03: C       0
+	 * Bit 02: B       1
+	 * Bit 01: 1       1
+	 * Bit 00: XN      execute never (1 - not executable)
+	 *
+	 * TEX C B | Description               | Memory type      | Shareable
+	 * 000 0 0 | Strongly-ordered          | Strongly-ordered | Shareable
+	 * 000 0 1 | Shareable Device          | Device           | Shareable
+	 * 000 1 0 | Outer/Inner Write-Through | Normal           | S bit
+	 *         | no Write-Allocate         |                  |
+	 * 000 1 1 | Outer/inner Write-Back    | Normal           | S bit
+	 *         | no Write-Allocate         |                  |
+	 * 001 0 0 | Outer/Inner Non-cacheable | Normal           | S bit
+	 * 001 0 1 | reserved                  | -                | -
+	 * 001 1 0 | IMPL                      | IMPL             | IMPL
+	 * 001 1 1 | Outer/inner Write-Back    | Normal           | S bit
+	 *         | Write-Allocate            |                  |
+	 * 010 0 0 | Non-shareable Device      | Device           | Non-share.
+	 * 010 0 1 | reserved                  | -                | -
+	 * 010 1 x | reserved                  | -                | -
+	 * 011 x x | reserved                  | -                | -
+	 * 1BB A A | Cacheable Memory          | Normal           | S bit
+	 *         | AA inner / BB outer       |                  |
+	 *
+	 * Inner/Outer cache attribute encoding
+	 * 00 non-cacheable
+	 * 01 Write-Back, Write-Allocate
+	 * 10 Write-Through, no Write Allocate
+	 * 11 Write-Back, no Write Allocate
+	 *
+	 * AP[2:1] simplified access permission model
+	 * 00 read/write, only kernel
+	 * 01 read/write, all
+	 * 10 read-only, only kernel
+	 * 11 read-only, all
+	 */
+
+	// outer and inner write back, write allocate, shareable
+	// 0b0101 0100 0111
+	leaf_table[slot] = phys_addr | 0x547;
+	tripple_barrier();
+    }
+
+    void unmap(uint32_t slot) {
+	tripple_barrier();
+	// remove from leaf_table
+	leaf_table[slot] = 0;
+	tripple_barrier();
+	// invalidate page
+	page *virt = &((page *)0x400000)[slot];
+	asm volatile("mcr p15, 0, %[ptr], c8, c7, 1"::[ptr]"r"(virt));
+	tripple_barrier();
     }
 }
 
@@ -310,6 +402,17 @@ void kernel_main(uint32_t r0, uint32_t model_id, void *atags) {
     delay(0x100000);
 
     MMU::init();
+
+    MMU::page *p = (MMU::page*)MMU::_mem_start;
+    for(uint32_t slot = 0; slot < 256; ++slot) {
+	blink(panic_delay * 4);
+	MMU::map(slot, (intptr_t)p);
+	MMU::page *virt = &((MMU::page *)0x400000)[slot];
+	// writing to page faults
+	virt->data[0] = 0;
+	MMU::unmap(slot);
+	++p;
+    }
     
     panic();
 }
