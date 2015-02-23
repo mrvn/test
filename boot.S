@@ -45,7 +45,7 @@ tmp1:	ldr	r0, [pc, #tmp2 - tmp1 - 8]
 tmp2:	.word	delay - tmp1
 
 */
-
+	
 // store constants
 text.boot.constants:
 .ltorg
@@ -68,9 +68,8 @@ core_wakeup:
 	and	r0, #3
 
 	// get stack
-	lsl	r0, #2
 	ldr	r1, =stacks
-	ldr	sp, [r1, r0]
+	ldr	sp, [r1, r0, lsl #2]
 	
 	// Call kernel_main
         ldr     r3, =core_main
