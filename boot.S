@@ -39,7 +39,12 @@ halt:
 	ldr	r1, =1b
 	sub	r0, r1
 	bl	put_uint32
-*/	
+
+tmp1:	ldr	r0, [pc, #tmp2 - tmp1 - 8]
+	ldr	r0, [pc, r0]
+tmp2:	.word	delay - tmp1
+
+*/
 
 // store constants
 text.boot.constants:
