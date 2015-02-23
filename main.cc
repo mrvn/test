@@ -194,8 +194,8 @@ namespace MMU {
     void init(void) {
 	uint32_t base;
 	// initialize page_table
-	// 4MB of kernel memory
-	for (base = 0; base < 4; base++) {
+	// 1024MB - 16MB of kernel memory (some belongs to the VC)
+	for (base = 0; base < 1024 - 16; base++) {
 	    // section descriptor (1 MB)
 #ifdef CACHED_TLB
 	    // outer and inner write back, write allocate, not shareable (fast
@@ -211,9 +211,6 @@ namespace MMU {
 #endif
 	}
 
-	// one second level page tabel (leaf table) at 0x00400000
-	page_table[base++] = (intptr_t)leaf_table | 0x1;
-
 	// unused up to 0x3F000000
 	for (; base < 1024 - 16; base++) {
 	    page_table[base] = 0;
@@ -225,7 +222,20 @@ namespace MMU {
 	    page_table[base] = base << 20 | 0x10416;
 	}
 
-	// 3G unused
+	// 1 MB mailboxes
+	// shared device, never execute
+	page_table[base] = base << 20 | 0x10416;
+	++base;
+	
+	// unused up to 0x7FFFFFFF
+	for (; base < 2048; base++) {
+	    page_table[base] = 0;
+	}
+
+	// one second level page tabel (leaf table) at 0x80000000
+	page_table[base++] = (intptr_t)leaf_table | 0x1;
+
+	// 2047MB unused (rest of address space)
 	for (; base < 4096; base++) {
 	    page_table[base] = 0;
 	}
@@ -397,10 +407,57 @@ namespace MMU {
 	leaf_table[slot] = 0;
 	tripple_barrier();
 	// invalidate page
-	page *virt = &((page *)0x400000)[slot];
+	page *virt = &((page *)0x80000000)[slot];
 	asm volatile("mcr p15, 0, %[ptr], c8, c7, 1"::[ptr]"r"(virt));
 	tripple_barrier();
     }
+}
+
+/**********************************************************************
+ * SMP                                                                *
+ **********************************************************************/
+namespace SMP {
+    // Setup SMP (Boot Offset = $4000008C + ($10 * Core), Core = 1..3)
+    enum {
+	CORE_BASE = 0x4000008C,
+
+	Core1Boot = 0x10, // Core 1 Boot Offset
+	Core2Boot = 0x20, // Core 2 Boot Offset
+	Core3Boot = 0x30, // Core 3 Boot Offset
+    };
+
+    typedef void (*fn)(void);
+
+#define CORE_REG(x) ((volatile fn *)(CORE_BASE + (x)))
+
+    void core_wakeup(void) {
+	puts("core is up\n");
+	while(true) { }
+    }
+    
+    void init() {
+	puts("starting core 1\n");
+	blink(panic_delay * 4);
+	*CORE_REG(Core1Boot) = core_wakeup;
+	blink(panic_delay * 4);
+	puts("started core 1\n");
+	blink(panic_delay * 4);
+
+    	puts("starting core 2\n");
+	blink(panic_delay * 4);
+	*CORE_REG(Core2Boot) = core_wakeup;
+	blink(panic_delay * 4);
+	puts("started core 2\n");
+	blink(panic_delay * 4);
+
+    	puts("starting core 3\n");
+	blink(panic_delay * 4);
+	*CORE_REG(Core3Boot) = core_wakeup;
+	blink(panic_delay * 4);
+	puts("started core 3\n");
+	blink(panic_delay * 4);
+}
+
 }
 
 void kernel_main(uint32_t r0, uint32_t model_id, void *atags) {
@@ -419,6 +476,8 @@ void kernel_main(uint32_t r0, uint32_t model_id, void *atags) {
 
     MMU::init();
 
+    SMP::init();
+
     puts("mapping and cleaning memory");
     MMU::page *p = (MMU::page*)MMU::_mem_start;
     for(uint32_t slot = 0; slot < 256; ++slot) {
@@ -426,7 +485,7 @@ void kernel_main(uint32_t r0, uint32_t model_id, void *atags) {
 	putc('.');
 	blink(panic_delay);
 	MMU::map(slot, (intptr_t)p);
-	MMU::page *virt = &((MMU::page *)0x400000)[slot];
+	MMU::page *virt = &((MMU::page *)0x80000000)[slot];
 	// writing to page faults
 	virt->data[0] = 0;
 	MMU::unmap(slot);
