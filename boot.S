@@ -59,3 +59,45 @@ delay:
 	subs	r0, #1
 	bne	delay
 	bx	lr
+
+// core wakes up here, set stack and call core_main
+.global core_wakeup
+core_wakeup:
+	// get core ID
+	mrc	p15,0,r0,c0,c0,5
+	and	r0, #3
+
+	// get stack
+	lsl	r0, #2
+	ldr	r1, =stacks
+	ldr	sp, [r1, r0]
+	
+	// Call kernel_main
+        ldr     r3, =core_main
+        blx     r3
+
+	// busy loop
+1:	b	1b
+	
+.section ".data"
+	.align 2
+	.global stacks
+stacks:	.word stack0
+	.word stack1
+	.word stack2
+	.word stack3
+	
+.section ".bss"
+	.align 12
+	.fill 16384, 1, 0
+	.global stack0
+stack0:	
+	.fill 16384, 1, 0
+	.global stack1
+stack1:
+	.fill 16384, 1, 0
+	.global stack2
+stack2:
+	.fill 16384, 1, 0
+	.global stack3
+stack3:

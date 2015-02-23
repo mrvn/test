@@ -146,6 +146,15 @@ namespace UART {
 	while(*UART_REG(UART0_FR) & (1 << 4)) { }
 	return *UART_REG(UART0_DR);
     }
+
+    void put_uint32(uint32_t x) {
+	static const char HEX[] = "0123456789ABCDEF";
+	put('0');
+	put('x');
+	for(int i = 28; i >= 0; i -= 4) {
+	    put(HEX[(x >> i) % 16]);
+	}
+    }
 }
 
 void putc(char c) {
@@ -154,6 +163,10 @@ void putc(char c) {
 
 void puts(const char *str) {
     while(*str) putc(*str++);
+}
+
+void put_uint32(uint32_t x) {
+    UART::put_uint32(x);
 }
 
 void blink(uint32_t time) {
@@ -191,7 +204,7 @@ namespace MMU {
 	extern page _mem_end[];
     }
 
-    void init(void) {
+    void init_page_table() {
 	uint32_t base;
 	// initialize page_table
 	// 1024MB - 16MB of kernel memory (some belongs to the VC)
@@ -244,7 +257,9 @@ namespace MMU {
 	for (base = 0; base < 256; base++) {
 	    leaf_table[base] = 0;
 	}
-
+    }
+    
+    void init() {
 	// set SMP bit in ACTLR
 	uint32_t auxctrl;
 	asm volatile ("mrc p15, 0, %0, c1, c0,  1" : "=r" (auxctrl));
@@ -331,7 +346,7 @@ namespace MMU {
 
 	// instruction cache makes delay way faster, slow panic down
 #ifdef CACHED_TLB
-	panic_delay *= 0x200;
+	panic_delay = 0x2000000;
 #endif
     }
 
@@ -430,33 +445,53 @@ namespace SMP {
 
 #define CORE_REG(x) ((volatile fn *)(CORE_BASE + (x)))
 
-    void core_wakeup(void) {
-	puts("core is up\n");
-	while(true) { }
+    volatile uint32_t count[4] = { 0 };
+
+    // Multiprocessor Affinity Register (MPIDR)
+    uint32_t get_mpidr(void) {
+	uint32_t mpidr;
+	asm volatile ("mrc p15,0,%0,c0,c0,5" : "=r" (mpidr));
+	return mpidr;
+    }
+
+    extern "C" {
+	void core_wakeup(void);
+	void core_main(void);
+    }
+    
+    void core_main(void) {
+	puts("core is up: MPIDR = ");
+	put_uint32(get_mpidr());
+	putc('\n');
+	MMU::init();
+	puts("core is virtual\n");
+
+	int id = get_mpidr() & 3;
+	while(true) { count[id]++; }
     }
     
     void init() {
 	puts("starting core 1\n");
-	blink(panic_delay * 4);
+	blink(panic_delay * 0x10);
 	*CORE_REG(Core1Boot) = core_wakeup;
-	blink(panic_delay * 4);
+	blink(panic_delay * 0x10);
 	puts("started core 1\n");
-	blink(panic_delay * 4);
+	blink(panic_delay * 0x10);
 
     	puts("starting core 2\n");
-	blink(panic_delay * 4);
+	blink(panic_delay * 0x10);
 	*CORE_REG(Core2Boot) = core_wakeup;
-	blink(panic_delay * 4);
+	blink(panic_delay * 0x10);
 	puts("started core 2\n");
-	blink(panic_delay * 4);
+	blink(panic_delay * 0x10);
 
     	puts("starting core 3\n");
-	blink(panic_delay * 4);
+	blink(panic_delay * 0x10);
 	*CORE_REG(Core3Boot) = core_wakeup;
-	blink(panic_delay * 4);
+	blink(panic_delay * 0x10);
 	puts("started core 3\n");
-	blink(panic_delay * 4);
-}
+	blink(panic_delay * 0x10);
+    }
 
 }
 
@@ -474,10 +509,23 @@ void kernel_main(uint32_t r0, uint32_t model_id, void *atags) {
     puts("\nHello\n");
     delay(0x100000);
 
+    MMU::init_page_table();
     MMU::init();
 
     SMP::init();
 
+    for (int i = 0; i < 10; ++i) {
+	puts("counts = ");
+	put_uint32(SMP::count[1]);
+	putc(' ');
+	put_uint32(SMP::count[2]);
+	putc(' ');
+	put_uint32(SMP::count[3]);
+	putc('\n');
+	blink(panic_delay);
+    }
+    panic();
+    
     puts("mapping and cleaning memory");
     MMU::page *p = (MMU::page*)MMU::_mem_start;
     for(uint32_t slot = 0; slot < 256; ++slot) {
