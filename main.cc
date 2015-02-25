@@ -19,6 +19,8 @@
 #include "string.h"
 #include "led.h"
 #include "uart.h"
+#include "fpu.h"
+
 #include "gpio.h"
 #include "framebuffer.h"
 #include "font.h"
@@ -288,23 +290,6 @@ namespace MMU {
 	page *virt = &((page *)0x80000000)[slot];
 	asm volatile("mcr p15, 0, %[ptr], c8, c7, 1"::[ptr]"r"(virt));
 	instruction_barrier();
-    }
-}
-
-/**********************************************************************
- * FPU                                                                *
- **********************************************************************/
-namespace FPU {
-    // Enable Advanced SIMD & Vector Floating Point Calculations (NEON MPE)
-    void init(void) {
-	uint32_t reg;
-	// read Access Control Register
-	asm volatile("mrc p15,0,%0,c1,c0,2" : "=r" (reg));
-	reg |= 0x300000 + 0xC00000; // Enable Single & Double Precision
-	// write Access Control Register
-	asm volatile("mcr p15,0,%0,c1,c0,2" :: "r" (reg));
-	// enable VFP
-	asm volatile("vmsr fpexc,%0" :: "r" (0x40000000));
     }
 }
 
