@@ -211,6 +211,7 @@ namespace Mandelbrot {
 	    ++lines;
 	}
 	show_lines(0, lines);
+	while(params.running > 0) { }
 	return true;
     }
 
