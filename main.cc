@@ -17,6 +17,7 @@
 
 #include <stdint.h>
 #include "string.h"
+#include "led.h"
 #include "gpio.h"
 #include "framebuffer.h"
 #include "font.h"
@@ -27,25 +28,6 @@
 
 extern "C" {
     void kernel_main(uint32_t r0, uint32_t model_id, void *atags);
-}
-
-/**********************************************************************
- * LED                                                                *
- **********************************************************************/
-namespace LED {
-    // configure GPIO pins for the LED
-    void init(void) {
-	// Disable pull up/down for pin 47
-	GPIO::set_pull_up_down(47, GPIO::OFF);
-	// configure GPIO pin 47 for output
-	GPIO::set_function(47, GPIO::OUTPUT);
-    }
-
-    // turn LED on or off
-    void set(bool state) {
-	// set or clear pin 47
-	GPIO::set(47, state);
-    }
 }
 
 /**********************************************************************
