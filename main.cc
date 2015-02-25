@@ -954,7 +954,7 @@ namespace Mandelbrot {
 	double xmin, ymin, xmax, ymax;
 	char c;
     again:
-	puts("Select [1-9N]: ");
+	puts("Select [1-9no]: ");
 	c = UART::get();
 	putc(c);
 	putc('\n');	
@@ -969,6 +969,7 @@ namespace Mandelbrot {
 	case '8': zx = 1; zy = 0; break;
 	case '9': zx = 2; zy = 0; break;
 	case 'n': goto new_nmax;
+	case 'o': goto zoom_out;
 	default:
 	    if (step > 0) {
 		return step;
@@ -1023,6 +1024,27 @@ namespace Mandelbrot {
 
     new_nmax:
 	params.nmax *= 2;
+	for(uint32_t y = 0; y < Framebuffer::fb.height; ++y) {
+	    for(uint32_t x = 0; x < Framebuffer::fb.width; ++x) {
+		Framebuffer::Pixel *p = (Framebuffer::Pixel*)(Framebuffer::fb.base + x * sizeof(Framebuffer::Pixel) + y * Framebuffer::fb.pitch);
+		if (p->red == 0 && p->green == 0 && p->blue == 0) {
+		    p->red = 0x80;
+		    p->green = 0x80;
+		    p->blue = 0x80;
+		}
+		p->alpha = 0x80;
+	    }
+	}
+	return 64;
+    zoom_out:
+	xmin = params.xmin - (params.xmax - params.xmin) / 2;
+	ymin = params.ymin - (params.ymax - params.ymin) / 2;
+	xmax = params.xmax + (params.xmax - params.xmin) / 2;
+	ymax = params.ymax + (params.ymax - params.ymin) / 2;
+	params.xmin = xmin;
+	params.ymin = ymin;
+	params.xmax = xmax;
+	params.ymax = ymax;
 	for(uint32_t y = 0; y < Framebuffer::fb.height; ++y) {
 	    for(uint32_t x = 0; x < Framebuffer::fb.width; ++x) {
 		Framebuffer::Pixel *p = (Framebuffer::Pixel*)(Framebuffer::fb.base + x * sizeof(Framebuffer::Pixel) + y * Framebuffer::fb.pitch);
