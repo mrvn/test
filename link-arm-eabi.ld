@@ -34,6 +34,14 @@ SECTIONS
     .rodata : {
 	*(.rodata)
     }
+    _dyn_rel_start = .;
+    .dyn.rel : {
+        *(.dyn.rel)
+    }
+    _dyn_rel_end = .;
+    .rel.plt : {
+        *(.rel.plt)
+    }
     .init_array : {
     	_init_array_start = .;
 	*(.init_array)
