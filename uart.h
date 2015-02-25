@@ -23,13 +23,16 @@
 #define KERNEL_UART_H 1
 
 #include <stdint.h>
+#include <stddef.h>
 
 namespace UART {
     // configure UART
     void init(void);
     void put(uint8_t x);
+    void write(const char *buf, size_t len);
     uint8_t get(void);
     bool poll(void);
+    void set_with_locks(void);
 }
 
 #endif // #ifndef KERNEL_UART_H

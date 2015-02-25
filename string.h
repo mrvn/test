@@ -30,6 +30,8 @@ extern "C" {
 
 void * memcpy(void * __restrict__ dest, const void * __restrict__ src, size_t n) __attribute__((used));
 
+size_t strlen(const char *str);
+    
 #ifdef __cplusplus
 }
 #endif

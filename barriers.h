@@ -43,5 +43,18 @@ static inline void data_sync_barrier(void) {
     asm volatile ("dsb" ::: "memory");
 }
 
+/*
+ * Clean and invalidate entire cache
+ * Flush pending writes to main memory
+ * Remove all data in data cache
+ */
+static inline void flush_cache(void) {
+    // RPi
+    // asm volatile("mcr p15, #0, %[zero], c7, c14, #0"
+    //              : : [zero]"r"(0));
+    // RPi2
+    // FIXME
+}
+
 #endif // #ifndef KERNEL_BARRIERS_H
 

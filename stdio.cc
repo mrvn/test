@@ -21,20 +21,23 @@
 
 #include "stdio.h"
 #include "uart.h"
+#include "string.h"
 
 void putc(char c) {
     UART::put(c);
 }
 
 void puts(const char *str) {
-    while(*str) putc(*str++);
+    size_t len = strlen(str);
+    UART::write(str, len);
 }
 
 void put_uint32(uint32_t x) {
     static const char HEX[] = "0123456789ABCDEF";
-    putc('0');
-    putc('x');
+    char buf[] = "0x00000000";
+    char *p = &buf[2];
     for(int i = 28; i >= 0; i -= 4) {
-	putc(HEX[(x >> i) % 16]);
+	*p++ = HEX[(x >> i) % 16];
     }
+    UART::write(buf, 10);
 }

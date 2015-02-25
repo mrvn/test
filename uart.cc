@@ -96,6 +96,10 @@ namespace UART {
 	return Peripherals::reg(BASE + offset);
     }
 
+    static int read_lock;
+    static int write_lock;
+    static bool with_locks;
+
     // initialize uart
     void init(void) {
         // Disable UART0.
@@ -136,23 +140,60 @@ namespace UART {
 
         // Enable UART0, receive & transfer part of UART.
 	*reg(CR) = CR_UARTEN | CR_TXW | CR_RXE;
+
+	read_lock = 0;
+	write_lock = 0;
+	with_locks = false;
     }
 
-    void put(uint8_t x) {
+    void put_with_lock(uint8_t x) {
 	// wait for space in the send buffer
 	while(*reg(FR) & FR_TXFF) {	}
 	*reg(DR) = x;
     }
 
+    void put(uint8_t x) {
+	// aquire lock
+	if (with_locks)
+	    while(__sync_lock_test_and_set(&write_lock, 1) == 1) { }
+	put_with_lock(x);
+	// release lock
+	if (with_locks)
+	    __sync_lock_release(&write_lock);
+    }
+
+    void write(const char *buf, size_t len) {
+	// aquire lock
+	if (with_locks)
+	    while(__sync_lock_test_and_set(&write_lock, 1) == 1) { }
+	while(len-- > 0) {
+	    put_with_lock(*buf++);
+	}
+	// release lock
+	if (with_locks)
+	    __sync_lock_release(&write_lock);
+    }
+
     uint8_t get(void) {
+	// aquire lock
+	if (with_locks)
+	    while(__sync_lock_test_and_set(&read_lock, 1) == 1) { }
 	// wait for something in the receive buffer
 	while(*reg(FR) & FR_RXFE) { }
-	return *reg(DR);
+	uint8_t res = *reg(DR);
+	// release lock
+	if (with_locks)
+	    __sync_lock_release(&read_lock);
+	return res;
     }
 
     bool poll(void) {
 	// any input pending?
 	return !(*reg(FR) & FR_RXFE);
+    }
+
+    void set_with_locks(void) {
+	with_locks = true;
     }
 }
 

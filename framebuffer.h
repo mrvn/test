@@ -16,8 +16,8 @@
    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
 */
 
-#ifndef FRAMEBUFFER_H
-#define FRAMEBUFFER_H
+#ifndef KERNEL_FRAMEBUFFER_H
+#define KERNEL_FRAMEBUFFER_H
 
 #include <stdint.h>
 
@@ -55,4 +55,4 @@ namespace Framebuffer {
     Error init(void);
 }
 
-#endif // #ifndef FRAMEBUFFER_H
+#endif // #ifndef KERNEL_FRAMEBUFFER_H

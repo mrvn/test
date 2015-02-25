@@ -52,291 +52,74 @@ void panic() {
     }
 }
 
-/*
- * Clean and invalidate entire cache
- * Flush pending writes to main memory
- * Remove all data in data cache
- */
-static inline void flush_cache(void) {
-    // RPi
-    // asm volatile("mcr p15, #0, %[zero], c7, c14, #0"
-    //              : : [zero]"r"(0));
-    // RPi2
-    // FIXME
-}
-
-/**********************************************************************
- * Framebuffer                                                        *
- **********************************************************************/
-namespace Framebuffer {
-    enum {
-	// Mailbox registers
-	MAILBOX0READ   = 0xb880,
-	MAILBOX0STATUS = 0xb898,
-	MAILBOX0WRITE  = 0xb8a0,
-
-	// Channel for framebuffer
-	FBCHAN = 8,
-    };
-
-#define MAILBOX(x) (Peripherals::reg(x))
-
-    FB fb;
-
-    // Status register
-    enum { SHIFT_EMPTY = 30, SHIFT_FULL };
-    enum Flags {
-	EMPTY = 1 << SHIFT_EMPTY,
-	FULL = 1 << SHIFT_FULL
-    };
-
-    void write(void *buf, uint32_t chan) {
-	volatile uint32_t *status = MAILBOX(MAILBOX0STATUS);
-	volatile uint32_t *write = MAILBOX(MAILBOX0WRITE);
-	data_memory_barrier();
-	// don't use cached values
-	flush_cache();
-	puts("status at ");
-	put_uint32((intptr_t)status);
-	putc('\n');
-	// wait for mailbox to be not full
-	while(*status & FULL) {
-	    puts("full\n");
-	    flush_cache();
-	}
-	*write = (intptr_t)buf | chan;
-    }
-
-    void * read(uint32_t chan) {
-	volatile uint32_t *status = MAILBOX(MAILBOX0STATUS);
-	volatile uint32_t *read = MAILBOX(MAILBOX0READ);
-	// possibly switching peripheral
-	data_memory_barrier();
-	while(true) {
-	    // don't use cached values
-	    flush_cache();
-	    // wait for mailbox to contain something
-	    while(*status & EMPTY) {
-		flush_cache();
-	    }
-	    uint32_t res = *read;
-	    if ((res & 0xF) == chan) return (void *)(res & ~0xF);
-	}
-    }
-  
-    // initialize framebuffer
-    Error init(void) {
-	puts("Framebuffer::init()\n");
-
-	// some spare memory for mail content
-	uint32_t mailbuffer[1024] __attribute__((aligned(16)));
-	
-	/* Get the display size */
-	mailbuffer[0] = 8 * 4; // Total size
-	mailbuffer[1] = 0; // Request
-	mailbuffer[2] = 0x40003; // Display size
-	mailbuffer[3] = 8; // Buffer size
-	mailbuffer[4] = 0; // Request size
-	mailbuffer[5] = 0; // Space for horizontal resolution
-	mailbuffer[6] = 0; // Space for vertical resolution
-	mailbuffer[7] = 0; // End tag
-
-	write(mailbuffer, FBCHAN);
-	uint32_t *buf = (uint32_t *)read(FBCHAN);
-	
-	/* Valid response in data structure? */
-	if (buf[1] != 0x80000000) return FAIL_GET_RESOLUTION;
-
-	fb.width = buf[5];
-	fb.height = buf[6];
-
-	if (fb.width == 0 || fb.height == 0) return FAIL_GOT_INVALID_RESOLUTION;
-
-	/* Set up screen */
-	unsigned int c = 1;
-	mailbuffer[c++] = 0; // Request
-
-	mailbuffer[c++] = 0x00048003; // Tag id (set physical size)
-	mailbuffer[c++] = 8; // Value buffer size (bytes)
-	mailbuffer[c++] = 8; // Req. + value length (bytes)
-	mailbuffer[c++] = fb.width; // Horizontal resolution
-	mailbuffer[c++] = fb.height; // Vertical resolution
-
-	mailbuffer[c++] = 0x00048004; // Tag id (set virtual size)
-	mailbuffer[c++] = 8; // Value buffer size (bytes)
-	mailbuffer[c++] = 8; // Req. + value length (bytes)
-	mailbuffer[c++] = fb.width; // Horizontal resolution
-	mailbuffer[c++] = fb.height; // Vertical resolution
-
-	mailbuffer[c++] = 0x00048005; // Tag id (set depth)
-	mailbuffer[c++] = 4; // Value buffer size (bytes)
-	mailbuffer[c++] = 4; // Req. + value length (bytes)
-	mailbuffer[c++] = 32; // 32 bpp
-
-	mailbuffer[c++] = 0x00040001; // Tag id (allocate framebuffer)
-	mailbuffer[c++] = 8; // Value buffer size (bytes)
-	mailbuffer[c++] = 4; // Req. + value length (bytes)
-	mailbuffer[c++] = 16; // Alignment = 16
-	mailbuffer[c++] = 0; // Space for response
-
-	mailbuffer[c++] = 0; // Terminating tag
-
-	mailbuffer[0] = c*4; // Buffer size
-
-	write(mailbuffer, FBCHAN);
-	buf = (uint32_t *)read(FBCHAN);
-
-	/* Valid response in data structure */
-	if(buf[1] != 0x80000000) return FAIL_SETUP_FRAMEBUFFER;
-
-	// Scan replies for allocate response
-	unsigned int i = 2; /* First tag */
-	uint32_t data;
-	while ((data = buf[i])) {
-	    // allocate response?
-	    if (data == 0x40001) break;
-
-	    /* Skip to next tag
-	     * Advance count by 1 (tag) + 2 (buffer size/value size)
-	     * + specified buffer size
-	     */
-	    i += 3 + (buf[i + 1] >> 2);
-
-	    if (i > c) return FAIL_INVALID_TAGS;
-	}
-
-	/* 8 bytes, plus MSB set to indicate a response */
-	if (buf[i + 2] != 0x80000008) return FAIL_INVALID_TAG_RESPONSE;
-
-	/* Framebuffer address/size in response */
-	fb.base = buf[i + 3];
-	fb.size = buf[i + 4];
-
-	if (fb.base == 0 || fb.size == 0) return FAIL_INVALID_TAG_DATA;
-
-	// fb.base += 0xC0000000; // physical to virtual
-	
-	/* Get the framebuffer pitch (bytes per line) */
-	mailbuffer[0] = 7 * 4; // Total size
-	mailbuffer[1] = 0; // Request
-	mailbuffer[2] = 0x40008; // Display size
-	mailbuffer[3] = 4; // Buffer size
-	mailbuffer[4] = 0; // Request size
-	mailbuffer[5] = 0; // Space for pitch
-	mailbuffer[6] = 0; // End tag
-
-	write(mailbuffer, FBCHAN);
-	buf = (uint32_t *)read(FBCHAN);
-
-	/* 4 bytes, plus MSB set to indicate a response */
-	if (buf[4] != 0x80000004) return FAIL_INVALID_PITCH_RESPONSE;
-
-	fb.pitch = buf[5];
-	if (fb.pitch == 0) return FAIL_INVALID_PITCH_DATA;
-
-	// set alpha to 0xff everywhere
-	for(uint32_t n = 3; n < fb.size; n += 4) {
-	    *(uint8_t*)(fb.base + n) = 0xff;
-	}
-
-	// draw chessboard pattern
-	for(uint32_t y = 0; y < fb.height; ++y) {
-	    for(uint32_t x = 0; x < fb.width; ++x) {
-		Pixel *p = (Pixel*)(fb.base + x * sizeof(Pixel) + y * fb.pitch);
-		uint8_t col = ((x & 16) ^ (y & 16)) ? 0x00 : 0xff;
-		p->red = col;
-		p->green = col;
-		p->blue = col;
-	    }
-	}
-
-	// draw back->red fade left to right at the top
-	// draw back->blue fade left to right at the bottom
-	for(int y = 0; y < 16; ++y) {
-	    for(int x = 16; x < 256 + 16; ++x) {
-		Pixel *p = (Pixel*)(fb.base + x * sizeof(Pixel) + y * fb.pitch);
-		p->red = x - 16;
-		p->green = 0;
-		p->blue = 0;
-		p = (Pixel*)(fb.base + x * sizeof(Pixel) + (fb.height - y - 1) * fb.pitch);
-		p->red = 0;
-		p->green = 0;
-		p->blue = x - 16;
-	    }
-	}
-	// draw back->green fade top to bottom at the left
-	// draw back->green fade top to bottom at the right
-	for(int y = 16; y < 256 + 16; ++y) {
-	    for(int x = 0; x < 16; ++x) {
-		Pixel *p = (Pixel*)(fb.base + x * sizeof(Pixel) + y * fb.pitch);
-		p->red = 0;
-		p->green = y - 16;
-		p->blue = 0;
-		p = (Pixel*)(fb.base + (fb.width - x- 1) * sizeof(Pixel) + y * fb.pitch);
-		p->red = y - 16;
-		p->green = y - 16;
-		p->blue = y - 16;		
-	    }
-	}
-
-	const char text[] = "MOOSE V0.0";
-	struct Arg {
-	    uint32_t color;
-	    uint32_t border;
-	    bool fill;
-	} args[] = {
-	    {~0LU,  0, false},
-	    { 0, ~0LU, false},
-	    {~0LU,  0, true},
-	    { 0, ~0LU, true},
-	    {0xff0000ff,  0,   false},
-	    {0xff0000ff, ~0LU, false},
-	    {0xff0000ff,  0,   true},
-	    {0xff0000ff, ~0LU, true},
-	    {0xff00ff00,  0,   false},
-	    {0xff00ff00, ~0LU, false},
-	    {0xff00ff00,  0,   true},
-	    {0xff00ff00, ~0LU, true},
-	    {0xffff0000,  0,   false},
-	    {0xffff0000, ~0LU, false},
-	    {0xffff0000,  0,   true},
-	    {0xffff0000, ~0LU, true},
-	};
-	int y = 152;
-	Arg *arg = args;
-	for (i = 0; i < 16; ++i) {
-	    int x = 152;
-	    for (const char *p = text; *p; ++p) {
-		Font::putc(fb, x, y, *p, arg->color, arg->border, arg->fill);
-		x += 8;
-	    }
-	    y += 16;
-	    ++arg;
-	}
-	
-	return SUCCESS;
-    }
-}
-
 /**********************************************************************
  * Mandelbrot                                                         *
  **********************************************************************/
 namespace Mandelbrot {
     struct Params {
-	double xmin, xmax, ymin, ymax;
-	int nmax;
-    } params = {
-	-2.5, 1.5, -1.25, 1.25,
-	64
+	volatile double xmin, xmax, ymin, ymax;
+	volatile uint32_t nmax;
+	volatile uint32_t stepx;
+	volatile uint32_t stepy;
+	volatile uint32_t line;
+	volatile uint32_t running;
     };
-
+    Params params = {
+	-2.5, 1.5, -1.25, 1.25,
+	64,
+	64, 64,
+	0,
+	0,
+    };
+    
     bool operator !=(const Framebuffer::Pixel& p, const Framebuffer::Pixel& q) {
 	return (p.red != q.red) || (p.green != q.green)
 	    || (p.blue != q.blue) || (p.alpha != q.alpha);
     }
-    
-    bool mandelbrot(uint32_t stepx, uint32_t stepy) {
-	const double bailout = 16.0;
+
+    void set_color(Framebuffer::Pixel *p, uint32_t n) {
+	if (n == params.nmax) {
+	    p->red = 0;
+	    p->green = 0;
+	    p->blue = 0;
+	} else if (n >= params.nmax / 2) { // white
+	    p->red = 0xff;
+	    p->green = 0xff;
+	    p->blue = 0xff;
+	} else if (n >= params.nmax / 4) { // yellow -> white
+	    int t = (n - params.nmax / 4) * 255 * 4 / params.nmax;
+	    p->red = 0xff;
+	    p->green = 0xff;
+	    p->blue = t;
+	} else if (n >= params.nmax / 8) { // red -> yellow
+	    int t = (n - params.nmax / 8) * 255 * 8 / params.nmax;
+	    p->red = 0xff;
+	    p->green = t;
+	    p->blue = 0;
+	} else if (n >= params.nmax / 16) { // magenta -> red
+	    int t = (n - params.nmax / 16) * 255 * 16 / params.nmax;
+	    p->red = 0xff;
+	    p->green = 0;
+	    p->blue = 0xff - t;
+	} else if (n >= params.nmax / 32) { // blue -> magenta
+	    int t = (n - params.nmax / 32) * 255 * 32 / params.nmax;
+	    p->red = t;
+	    p->green = 0;
+	    p->blue = 0xff;
+	} else if (n >= params.nmax / 64) { // cyan -> blue
+	    int t = (n - params.nmax / 64) * 255 * 64 / params.nmax;
+	    p->red = 0;
+	    p->green = 0xff - t;
+	    p->blue = 0xff;
+	} else { // green -> cyan
+	    int t = n * 255 * 64 / params.nmax;
+	    p->red = 0;
+	    p->green = 0xff;
+	    p->blue = t;
+	}	    
+    }
+
+    void guess(uint32_t stepx, uint32_t stepy) {
 	// guess gaps
 	for(uint32_t v = 4 * stepy; v + 4 * stepy < Framebuffer::fb.height; v += 2 * stepy) {
 	    for(uint32_t u = 4 * stepx; u + 4 * stepx < Framebuffer::fb.width; u += 2 * stepx) {
@@ -375,67 +158,79 @@ namespace Mandelbrot {
 		{}
 	    }
 	}
-	// compute missing bits
-	for(uint32_t v = 0; v < Framebuffer::fb.height; v += stepy) {
-	    if (UART::poll()) return false;
-	    double y0 = params.ymin + v * (params.ymax - params.ymin) / Framebuffer::fb.height;
-	    for(uint32_t u = 0; u < Framebuffer::fb.width; u += stepx) {
-		Framebuffer::Pixel *p = (Framebuffer::Pixel*)(Framebuffer::fb.base + u * sizeof(Framebuffer::Pixel) + v * Framebuffer::fb.pitch);
-		if (p->alpha == 0xff) continue;
-		double x0 = params.xmin + u * (params.xmax - params.xmin) / Framebuffer::fb.width;
-		int n = 0;
-		double x = x0, x2 = x0 * x0;
-		double y = y0, y2 = y0 * y0;
-		while (n < params.nmax && x2 + y2 < bailout) {
-		    y = 2 * x * y + y0;
-		    x = x2 - y2 + x0;
-		    y2 = y * y;
-		    x2 = x * x;
-		    ++n;
-		}
-		p->alpha = 0xff;
-		if (n == params.nmax) {
-		    p->red = 0;
-		    p->green = 0;
-		    p->blue = 0;
-		} else if (n >= params.nmax / 2) { // white
-		    p->red = 0xff;
-		    p->green = 0xff;
-		    p->blue = 0xff;
-		} else if (n >= params.nmax / 4) { // yellow -> white
-		    int t = (n - params.nmax / 4) * 255 * 4 / params.nmax;
-		    p->red = 0xff;
-		    p->green = 0xff;
-		    p->blue = t;
-		} else if (n >= params.nmax / 8) { // red -> yellow
-		    int t = (n - params.nmax / 8) * 255 * 8 / params.nmax;
-		    p->red = 0xff;
-		    p->green = t;
-		    p->blue = 0;
-		} else if (n >= params.nmax / 16) { // magenta -> red
-		    int t = (n - params.nmax / 16) * 255 * 16 / params.nmax;
-		    p->red = 0xff;
-		    p->green = 0;
-		    p->blue = 0xff - t;
-		} else if (n >= params.nmax / 32) { // blue -> magenta
-		    int t = (n - params.nmax / 32) * 255 * 32 / params.nmax;
-		    p->red = t;
-		    p->green = 0;
-		    p->blue = 0xff;
-		} else if (n >= params.nmax / 64) { // cyan -> blue
-		    int t = (n - params.nmax / 64) * 255 * 64 / params.nmax;
-		    p->red = 0;
-		    p->green = 0xff - t;
-		    p->blue = 0xff;
-		} else { // green -> cyan
-		    int t = n * 255 * 64 / params.nmax;
-		    p->red = 0;
-		    p->green = 0xff;
-		    p->blue = t;
-		}	    
+    }
+
+    void mandel_line(uint32_t v) {
+	const double bailout = 16.0;
+	double y0 = params.ymin + v * (params.ymax - params.ymin) / Framebuffer::fb.height;
+	for(uint32_t u = 0; u < Framebuffer::fb.width; u += params.stepx) {
+	    Framebuffer::Pixel *p = (Framebuffer::Pixel*)(Framebuffer::fb.base + u * sizeof(Framebuffer::Pixel) + v * Framebuffer::fb.pitch);
+	    if (p->alpha == 0xff) continue;
+	    double x0 = params.xmin + u * (params.xmax - params.xmin) / Framebuffer::fb.width;
+	    uint32_t n = 0;
+	    double x = x0, x2 = x0 * x0;
+	    double y = y0, y2 = y0 * y0;
+	    while (n < params.nmax && x2 + y2 < bailout) {
+		y = 2 * x * y + y0;
+		x = x2 - y2 + x0;
+		y2 = y * y;
+		x2 = x * x;
+		++n;
 	    }
+	    p->alpha = 0xff;
+	    set_color(p, n);
 	}
+    }
+
+    void show_lines(int core, uint32_t lines) {
+	char buf[] = "Core 0 computed 0000 lines\n";
+	buf[5] = '0' + core;
+	buf[16] = '0' + ((lines / 1000) % 10);
+	buf[17] = '0' + ((lines /  100) % 10);
+	buf[18] = '0' + ((lines /   10) % 10);
+	buf[19] = '0' + ((lines /    1) % 10);
+	puts(buf);
+    }
+    
+    bool mandelbrot(uint32_t stepx, uint32_t stepy) {
+	params.stepx = stepx;
+	params.stepy = stepy;
+	params.line = 0;
+	// compute missing bits
+	uint32_t v;
+	uint32_t lines = 0;
+	while((v = __sync_fetch_and_add(&params.line, params.stepy)) < Framebuffer::fb.height) {
+	    if (UART::poll()) {
+		// abort computaions
+		params.line = Framebuffer::fb.height;
+		show_lines(0, lines);
+		while(params.running > 0) { }
+		return false;
+	    }
+	    mandel_line(v);
+	    ++lines;
+	}
+	show_lines(0, lines);
 	return true;
+    }
+
+    void mandeld(int core) {
+	while(true) {
+	    // wait for something to do
+	    while(params.line >= Framebuffer::fb.height) { }
+	    // increase running count
+	    __sync_fetch_and_add(&params.running, 1);
+	    // loop as long as there is work to do
+	    uint32_t v;
+	    uint32_t lines = 0;
+	    while((v = __sync_fetch_and_add(&params.line, params.stepy)) < Framebuffer::fb.height) {
+		++lines;
+		mandel_line(v);
+	    }
+	    // decrement running count
+	    __sync_fetch_and_sub(&params.running, 1);
+	    show_lines(core, lines);
+	}
     }
 
     int zoom(int step) {
@@ -561,16 +356,13 @@ namespace Mandelbrot {
 		puts(" Step = ");
 		put_uint32(step);
 		putc('\n');
+		guess(step, step);
 		if (!mandelbrot(step, step)) break;
 		step /= 2;
 	    }
 	    step = zoom(step);
 	}
     }
-}
-
-void mandeld(void *) {
-    while(true) { }
 }
 
 void kernel_main(uint32_t r0, uint32_t model_id, void *atags) {
@@ -595,9 +387,12 @@ void kernel_main(uint32_t r0, uint32_t model_id, void *atags) {
     MMU::init_page_table();
     MMU::init();
     FPU::init();
-    SMP::start_core(1, mandeld, (void *)1);
-    SMP::start_core(2, mandeld, (void *)2);
-    SMP::start_core(3, mandeld, (void *)3);
+    SMP::start_core(1, (SMP::start_fn_t)Mandelbrot::mandeld, (void *)1);
+    SMP::start_core(2, (SMP::start_fn_t)Mandelbrot::mandeld, (void *)2);
+    SMP::start_core(3, (SMP::start_fn_t)Mandelbrot::mandeld, (void *)3);
+
+    // All cores have caches active, locking now works
+    UART::set_with_locks();
 
     /*
     puts("mapping and cleaning memory");
