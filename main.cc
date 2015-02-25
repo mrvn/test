@@ -18,6 +18,7 @@
 #include <stdint.h>
 #include "string.h"
 #include "led.h"
+#include "uart.h"
 #include "gpio.h"
 #include "framebuffer.h"
 #include "font.h"
@@ -30,99 +31,6 @@ extern "C" {
     void kernel_main(uint32_t r0, uint32_t model_id, void *atags);
 }
 
-/**********************************************************************
- * UART                                                               *
- **********************************************************************/
-namespace UART {
-    enum {
-	UART0_BASE = GPIO::GPIO_BASE + 0x1000, // 0x3F201000
-
-	UART0_DR     = 0x00, // 0x3F201000
-	UART0_RSRECR = 0x04, // 0x3F201004
-	UART0_FR     = 0x18, // 0x3F201018
-	UART0_ILPR   = 0x20, // 0x3F201020
-	UART0_IBRD   = 0x24, // 0x3F201024
-	UART0_FBRD   = 0x28, // 0x3F201028
-	UART0_LCRH   = 0x2C, // 0x3F20102C
-	UART0_CR     = 0x30, // 0x3F201030
-	UART0_IFLS   = 0x34, // 0x3F201034
-	UART0_IMSC   = 0x38, // 0x3F201038
-	UART0_RIS    = 0x3C, // 0x3F20103C
-	UART0_MIS    = 0x40, // 0x3F201040
-	UART0_ICR    = 0x44, // 0x3F201044
-	UART0_DMACR  = 0x48, // 0x3F201048
-	UART0_ITCR   = 0x80, // 0x3F201080
-	UART0_ITIP   = 0x84, // 0x3F201084
-	UART0_ITOP   = 0x88, // 0x3F201088
-	UART0_TDR    = 0x8C, // 0x3F20108C
-    };
-
-#define UART_REG(x) (Peripherals::reg(UART::UART0_BASE + x))
-
-    // initialize uart
-    void init(void) {
-        // Disable UART0.
-	*UART_REG(UART0_CR) = 0;
-	
-	// Disable pull up/down for pin 14, 15
-	GPIO::set_pull_up_down(14, GPIO::OFF);
-	GPIO::set_pull_up_down(15, GPIO::OFF);
-
-	// select function 0 for pin 14, 15
-	GPIO::set_function(14, GPIO::FN0);
-	GPIO::set_function(15, GPIO::FN0);
-
-        // Clear pending interrupts.
-	*UART_REG(UART0_ICR) = 0x7FF;
-
-        // Set integer & fractional part of baud rate.
-        // Divider = UART_CLOCK/(16 * Baud)
-        // Fraction part register = (Fractional part * 64) + 0.5
-        // UART_CLOCK = 3000000; Baud = 115200.
-
-        // Divider = 3000000/(16 * 115200) = 1.627 = ~1.
-        // Fractional part register = (.627 * 64) + 0.5 = 40.6 = ~40.
-	*UART_REG(UART0_IBRD) = 1;
-	*UART_REG(UART0_FBRD) = 40;
-
-        // Enable FIFO & 8 bit data transmission (1 stop bit, no parity)
-	*UART_REG(UART0_LCRH) = (1 << 4) | (1 << 5) | (1 << 6);
-
-        // Mask all interrupts.
-	*UART_REG(UART0_IMSC) = (1 << 1) | (1 << 4) | (1 << 5) | (1 << 6)
-	                      | (1 << 7) | (1 << 8) | (1 << 9) | (1 << 10);
-
-        // Enable UART0, receive & transfer part of UART.
-	*UART_REG(UART0_CR) = (1 << 0) | (1 << 8) | (1 << 9);
-    }
-
-    void put(uint8_t x) {
-	// wait for space in the send buffer
-	while(*UART_REG(UART0_FR) & (1 << 5)) {	}
-	*UART_REG(UART0_DR) = x;
-    }
-
-    uint8_t get(void) {
-	// wait for something in the receive buffer
-	while(*UART_REG(UART0_FR) & (1 << 4)) { }
-	return *UART_REG(UART0_DR);
-    }
-
-    bool poll(void) {
-	// any input pending?
-	return !(*UART_REG(UART0_FR) & (1 << 4));
-    }
-
-    void put_uint32(uint32_t x) {
-	static const char HEX[] = "0123456789ABCDEF";
-	put('0');
-	put('x');
-	for(int i = 28; i >= 0; i -= 4) {
-	    put(HEX[(x >> i) % 16]);
-	}
-    }
-}
-
 void putc(char c) {
     UART::put(c);
 }
@@ -132,7 +40,12 @@ void puts(const char *str) {
 }
 
 void put_uint32(uint32_t x) {
-    UART::put_uint32(x);
+    static const char HEX[] = "0123456789ABCDEF";
+    putc('0');
+    putc('x');
+    for(int i = 28; i >= 0; i -= 4) {
+	putc(HEX[(x >> i) % 16]);
+    }
 }
 
 void blink(uint32_t time) {
