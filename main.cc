@@ -17,6 +17,7 @@
 
 #include <stdint.h>
 #include "string.h"
+#include "peripherals.h"
 #include "framebuffer.h"
 #include "font.h"
 
@@ -26,11 +27,6 @@ extern "C" {
     void kernel_main(uint32_t r0, uint32_t model_id, void *atags);
     void delay(uint32_t);
 }
-
-// Raspberry Pi 2 Peripheral Base Address
-#define PERIPHERAL_BASE 0x3F000000
-
-#define REG(x) ((volatile uint32_t *)(PERIPHERAL_BASE + (x)))
 
 /**********************************************************************
  * GPIO                                                               *
@@ -52,7 +48,7 @@ namespace GPIO {
 	// Controls actuation of pull up/down for specific GPIO pin.
 	GPIO_PUDCLK0 = 0x98, // 0x3F200098
     };
-#define GPIO_REG(x) (REG(GPIO::GPIO_BASE + (x)))
+#define GPIO_REG(x) (Peripherals::reg(GPIO::GPIO_BASE + (x)))
 
     void set_function(uint32_t pin, uint32_t fn) {
 	volatile uint32_t *fsel =
@@ -109,7 +105,7 @@ namespace UART {
 	UART0_TDR    = 0x8C, // 0x3F20108C
     };
 
-#define UART_REG(x) (REG(UART::UART0_BASE + x))
+#define UART_REG(x) (Peripherals::reg(UART::UART0_BASE + x))
 
     // initialize uart
     void init(void) {
@@ -590,7 +586,7 @@ namespace Framebuffer {
 	FBCHAN = 8,
     };
 
-#define MAILBOX(x) (REG(x))
+#define MAILBOX(x) (Peripherals::reg(x))
 
     FB fb;
 
