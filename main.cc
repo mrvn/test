@@ -24,6 +24,7 @@
 #include "font.h"
 #include "peripherals.h"
 #include "delay.h"
+#include "barriers.h"
 
 #define UNUSED(x) (void)x
 
@@ -63,14 +64,23 @@ void panic() {
     }
 }
 
+/*
+ * Clean and invalidate entire cache
+ * Flush pending writes to main memory
+ * Remove all data in data cache
+ */
+static inline void flush_cache(void) {
+    // RPi
+    // asm volatile("mcr p15, #0, %[zero], c7, c14, #0"
+    //              : : [zero]"r"(0));
+    // RPi2
+    // FIXME
+}
 
 /**********************************************************************
  * MMU                                                                *
  **********************************************************************/
 namespace MMU {
-#define CACHED_TLB
-//#undef CACHED_TLB
-
     static volatile __attribute__ ((aligned (0x4000))) uint32_t page_table[4096];
     static volatile __attribute__ ((aligned (0x400))) uint32_t leaf_table[256];
 
@@ -90,18 +100,9 @@ namespace MMU {
 	// default: 880 MB ARM ram, 128MB VC
 	for (base = 0; base < 880; base++) {
 	    // section descriptor (1 MB)
-#ifdef CACHED_TLB
-	    // outer and inner write back, write allocate, not shareable (fast
-	    // but unsafe)
-	    // page_table[base] = base << 20 | 0x0140E;
 	    // outer and inner write back, write allocate, shareable (fast but
 	    // unsafe)
 	    page_table[base] = base << 20 | 0x1140E;
-#else
-	    // outer and inner write through, no write allocate, shareable
-	    // (safe but slower)
-	    page_table[base] = base << 20 | 0x1040A;
-#endif
 	}
 
 	// VC ram up to 0x3F000000
@@ -167,22 +168,11 @@ namespace MMU {
 	// always use TTBR0
 	asm volatile ("mcr p15, 0, %0, c2, c0, 2" :: "r" (0));
 
-#ifdef CACHED_TLB
 	// set TTBR0 (page table walk inner and outer write-back,
 	// write-allocate, cacheable, shareable memory)
 	asm volatile ("mcr p15, 0, %0, c2, c0, 0"
 		      :: "r" (0b1001010 | (unsigned) &page_table));
-	// set TTBR0 (page table walk inner and outer write-back,
-	// write-allocate, cacheable, non-shareable memory)
-	//asm volatile ("mcr p15, 0, %0, c2, c0, 0"
-	//	      :: "r" (0b1101010 | (unsigned) &page_table));
-#else
-	// set TTBR0 (page table walk inner and outer non-cacheable,
-	// non-shareable memory)
-	asm volatile ("mcr p15, 0, %0, c2, c0, 0"
-		      :: "r" (0 | (unsigned) &page_table));
-#endif
-	asm volatile ("isb" ::: "memory");
+	instruction_barrier();
 
 	/* SCTLR
 	 * Bit 31: SBZ     reserved
@@ -224,31 +214,15 @@ namespace MMU {
 	asm volatile ("mrc p15, 0, %0, c1, c0, 0" : "=r" (mode));
 	// mask: 0b0111 0011 0000 0010 0111 1000 0010 0111
 	// bits: 0b0010 0000 0000 0000 0001 1000 0010 0111
-#ifdef CACHED_TLB
 	mode &= 0x73027827;
 	mode |= 0x20001827;
-#else
-	// no caches
-	mode &= 0x73027827;
-	mode |= 0x20000023;
-#endif
 	asm volatile ("mcr p15, 0, %0, c1, c0, 0" :: "r" (mode) : "memory");
 
 	// instruction cache makes delay way faster, slow panic down
-#ifdef CACHED_TLB
 	panic_delay = 0x2000000;
-#endif
     }
 
-    void tripple_barrier() {
-	asm volatile ("isb" ::: "memory");
-	asm volatile ("dmb" ::: "memory");
-	asm volatile ("dsb" ::: "memory");
-    }
-    
     void map(uint32_t slot, uint32_t phys_addr) {
-	tripple_barrier();
-
 	/* second-level descriptor format (small page)
 	 * Bit 31: small page base address
 	 * ...
@@ -303,18 +277,17 @@ namespace MMU {
 	// RPi/RPi2 do not have hardware support for accessed
 	// 0b0101 0101 0111
 	leaf_table[slot] = phys_addr | 0x557;
-	tripple_barrier();
+	data_memory_barrier();
     }
 
     void unmap(uint32_t slot) {
-	tripple_barrier();
 	// remove from leaf_table
 	leaf_table[slot] = 0;
-	tripple_barrier();
+	data_memory_barrier();
 	// invalidate page
 	page *virt = &((page *)0x80000000)[slot];
 	asm volatile("mcr p15, 0, %[ptr], c8, c7, 1"::[ptr]"r"(virt));
-	tripple_barrier();
+	instruction_barrier();
     }
 }
 
@@ -402,32 +375,6 @@ namespace SMP {
 	blink(panic_delay * 0x10);
     }
 
-}
-
-/*
- * Clean and invalidate entire cache
- * Flush pending writes to main memory
- * Remove all data in data cache
- */
-static inline void flush_cache(void) {
-    // RPi
-    // asm volatile("mcr p15, #0, %[zero], c7, c14, #0"
-    //              : : [zero]"r"(0));
-    // RPi2
-    // FIXME
-}
-
-/*
- * Data memory barrier
- * No memory access after the DMB can run until all memory accesses
- * before it have completed.
- */
-static inline void data_memory_barrier(void) {
-    // RPi
-    // asm volatile("mcr p15, #0, %[zero], c7, c10, #5"
-    //	     : : [zero]"r"(0));
-    // RPi2
-    asm volatile ("dmb" ::: "memory");
 }
 
 /**********************************************************************
