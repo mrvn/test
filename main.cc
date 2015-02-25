@@ -228,9 +228,9 @@ namespace Mandelbrot {
 		++lines;
 		mandel_line(v);
 	    }
+	    show_lines(core, lines);
 	    // decrement running count
 	    __sync_fetch_and_sub(&params.running, 1);
-	    show_lines(core, lines);
 	}
     }
 
