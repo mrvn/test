@@ -93,10 +93,10 @@ namespace MMU {
 #ifdef CACHED_TLB
 	    // outer and inner write back, write allocate, not shareable (fast
 	    // but unsafe)
-	    page_table[base] = base << 20 | 0x0140E;
+	    // page_table[base] = base << 20 | 0x0140E;
 	    // outer and inner write back, write allocate, shareable (fast but
 	    // unsafe)
-	    //page_table[base] = base << 20 | 0x1140E;
+	    page_table[base] = base << 20 | 0x1140E;
 #else
 	    // outer and inner write through, no write allocate, shareable
 	    // (safe but slower)
