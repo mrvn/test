@@ -25,14 +25,7 @@ extern "C" {
     void kernel_main(uint32_t r0, uint32_t model_id, void *atags);
     void delay(uint32_t);
 
-    void * memcpy(void *dest, const void *src, uint32_t n) {
-	uint8_t *d = (uint8_t *)dest;
-	uint8_t *s = (uint8_t *)src;
-	while(n--) {
-	    *d++ = *s++;
-	}
-	return dest;
-    }
+    void * memcpy(void *dest, const void *src, uint32_t n);
 }
 
 // Raspberry Pi 2 Peripheral Base Address

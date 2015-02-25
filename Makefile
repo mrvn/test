@@ -1,4 +1,4 @@
-OBJS := boot.o font.o main.o
+OBJS := boot.o memcpy.o font.o main.o
 
 CFLAGS := -O2 -W -Wall -fPIE -flto
 CFLAGS += -march=armv7-a -mfloat-abi=hard -mfpu=vfpv3-d16
