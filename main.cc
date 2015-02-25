@@ -17,48 +17,16 @@
 
 #include <stdint.h>
 #include "string.h"
-#include "peripherals.h"
+#include "gpio.h"
 #include "framebuffer.h"
 #include "font.h"
+#include "peripherals.h"
+#include "delay.h"
 
 #define UNUSED(x) (void)x
 
 extern "C" {
     void kernel_main(uint32_t r0, uint32_t model_id, void *atags);
-    void delay(uint32_t);
-}
-
-/**********************************************************************
- * GPIO                                                               *
- **********************************************************************/
-namespace GPIO {
-    enum {
-	GPIO_BASE = 0x200000, // 0x3F200000
-
-	// function selector
-	GPIO_FSEL0   = 0x00, // 0x3F200000
-	GPIO_FSEL1   = 0x04, // 0x3F200004
-
-	// set and clear pin output
-	GPIO_SET1    = 0x20, // 0x3F200020
-	GPIO_CLR1    = 0x2C, // 0x3F20002C
-
-	// Controls actuation of pull up/down to ALL GPIO pins.
-	GPIO_PUD     = 0x94, // 0x3F200094
-	// Controls actuation of pull up/down for specific GPIO pin.
-	GPIO_PUDCLK0 = 0x98, // 0x3F200098
-    };
-#define GPIO_REG(x) (Peripherals::reg(GPIO::GPIO_BASE + (x)))
-
-    void set_function(uint32_t pin, uint32_t fn) {
-	volatile uint32_t *fsel =
-	    GPIO_REG((pin < 10) ? GPIO::GPIO_FSEL0 : GPIO::GPIO_FSEL1);
-	uint32_t shift = (pin < 10) ? pin : (pin - 10);
-	shift *= 3;
-	uint32_t mask = ~(7 << shift);
-	fn = fn << shift;
-	*fsel = (*fsel & mask) | fn;
-    }
 }
 
 /**********************************************************************
@@ -67,14 +35,16 @@ namespace GPIO {
 namespace LED {
     // configure GPIO pins for the LED
     void init(void) {
-	// configure GPIO pin 15 for function 1
-	GPIO::set_function(15, 1);
+	// Disable pull up/down for pin 47
+	GPIO::set_pull_up_down(47, GPIO::OFF);
+	// configure GPIO pin 47 for output
+	GPIO::set_function(47, GPIO::OUTPUT);
     }
 
     // turn LED on or off
     void set(bool state) {
-	// set or clear bit 15
-	*GPIO_REG(state ? GPIO::GPIO_SET1 : GPIO::GPIO_CLR1) = 1 << 15;
+	// set or clear pin 47
+	GPIO::set(47, state);
     }
 }
 
@@ -111,21 +81,14 @@ namespace UART {
     void init(void) {
         // Disable UART0.
 	*UART_REG(UART0_CR) = 0;
+	
+	// Disable pull up/down for pin 14, 15
+	GPIO::set_pull_up_down(14, GPIO::OFF);
+	GPIO::set_pull_up_down(15, GPIO::OFF);
 
-        // Disable pull up/down for all GPIO pins & delay for 150 cycles.
-	*GPIO_REG(GPIO::GPIO_PUD) = 0;
-	delay(150);
-
-	// Disable pull up/down for pin 14,15 & delay for 150 cycles.
-	*GPIO_REG(GPIO::GPIO_PUDCLK0) = (1 << 14) | (1 << 15);
-	delay(150);
-
-        // Write 0 to GPPUDCLK0 to make it take effect.
-	*GPIO_REG(GPIO::GPIO_PUDCLK0) = 0;
-
-	// select function 4 for pin 14, 15
-	GPIO::set_function(14, 4);
-	GPIO::set_function(15, 4);
+	// select function 0 for pin 14, 15
+	GPIO::set_function(14, GPIO::FN0);
+	GPIO::set_function(15, GPIO::FN0);
 
         // Clear pending interrupts.
 	*UART_REG(UART0_ICR) = 0x7FF;

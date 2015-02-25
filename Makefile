@@ -1,4 +1,4 @@
-OBJS := boot.o memcpy.o font.o main.o
+OBJS := boot.o memcpy.o gpio.o font.o main.o
 
 CROSS := arm-none-eabi-
 
