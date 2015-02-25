@@ -24,6 +24,14 @@
 
 #include <stddef.h>
 
-void * memcpy(void * restrict dest, const void * restrict src, size_t n) __attribute__((used));
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+void * memcpy(void * __restrict__ dest, const void * __restrict__ src, size_t n) __attribute__((used));
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif // #ifndef _STRING_H

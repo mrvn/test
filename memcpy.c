@@ -6,7 +6,7 @@
  * for arm optimized asm versions.
  */
 
-void * memcpy(void * restrict dest, const void * restrict src, size_t n) {
+void * memcpy(void * __restrict__ dest, const void * __restrict__ src, size_t n) {
     char *d = (char *)dest;
     const char *s = (const char *)src;
     while(n--) {

@@ -16,6 +16,7 @@
 */
 
 #include <stdint.h>
+#include "string.h"
 #include "framebuffer.h"
 #include "font.h"
 
@@ -24,8 +25,6 @@
 extern "C" {
     void kernel_main(uint32_t r0, uint32_t model_id, void *atags);
     void delay(uint32_t);
-
-    void * memcpy(void *dest, const void *src, uint32_t n);
 }
 
 // Raspberry Pi 2 Peripheral Base Address
