@@ -21,6 +21,8 @@
 #include "uart.h"
 #include "mmu.h"
 #include "fpu.h"
+#include "smp.h"
+#include "stdio.h"
 
 #include "gpio.h"
 #include "framebuffer.h"
@@ -33,23 +35,6 @@
 
 extern "C" {
     void kernel_main(uint32_t r0, uint32_t model_id, void *atags);
-}
-
-void putc(char c) {
-    UART::put(c);
-}
-
-void puts(const char *str) {
-    while(*str) putc(*str++);
-}
-
-void put_uint32(uint32_t x) {
-    static const char HEX[] = "0123456789ABCDEF";
-    putc('0');
-    putc('x');
-    for(int i = 28; i >= 0; i -= 4) {
-	putc(HEX[(x >> i) % 16]);
-    }
 }
 
 void blink(uint32_t time) {
@@ -78,75 +63,6 @@ static inline void flush_cache(void) {
     //              : : [zero]"r"(0));
     // RPi2
     // FIXME
-}
-
-/**********************************************************************
- * SMP                                                                *
- **********************************************************************/
-namespace SMP {
-    // Setup SMP (Boot Offset = $4000008C + ($10 * Core), Core = 1..3)
-    enum {
-	CORE_BASE = 0x4000008C,
-
-	Core1Boot = 0x10, // Core 1 Boot Offset
-	Core2Boot = 0x20, // Core 2 Boot Offset
-	Core3Boot = 0x30, // Core 3 Boot Offset
-    };
-
-    typedef void (*fn)(void);
-
-#define CORE_REG(x) ((volatile fn *)(CORE_BASE + (x)))
-
-    volatile uint32_t count[4] = { 0 };
-
-    // Multiprocessor Affinity Register (MPIDR)
-    uint32_t get_mpidr(void) {
-	uint32_t mpidr;
-	asm volatile ("mrc p15,0,%0,c0,c0,5" : "=r" (mpidr));
-	return mpidr;
-    }
-
-    extern "C" {
-	void core_wakeup(void);
-	void core_main(void);
-    }
-    
-    void core_main(void) {
-	puts("core is up: MPIDR = ");
-	put_uint32(get_mpidr());
-	putc('\n');
-	MMU::init();
-	puts("core is virtual\n");
-	FPU::init();
-	puts("core is floating\n");
-
-	int id = get_mpidr() & 3;
-	while(true) { count[id]++; }
-    }
-    
-    void init() {
-	puts("starting core 1\n");
-	blink(panic_delay * 0x10);
-	*CORE_REG(Core1Boot) = core_wakeup;
-	blink(panic_delay * 0x10);
-	puts("started core 1\n");
-	blink(panic_delay * 0x10);
-
-    	puts("starting core 2\n");
-	blink(panic_delay * 0x10);
-	*CORE_REG(Core2Boot) = core_wakeup;
-	blink(panic_delay * 0x10);
-	puts("started core 2\n");
-	blink(panic_delay * 0x10);
-
-    	puts("starting core 3\n");
-	blink(panic_delay * 0x10);
-	*CORE_REG(Core3Boot) = core_wakeup;
-	blink(panic_delay * 0x10);
-	puts("started core 3\n");
-	blink(panic_delay * 0x10);
-    }
-
 }
 
 /**********************************************************************
@@ -653,6 +569,9 @@ namespace Mandelbrot {
     }
 }
 
+void mandeld(void *) {
+    while(true) { }
+}
 
 void kernel_main(uint32_t r0, uint32_t model_id, void *atags) {
     UNUSED(r0);
@@ -676,18 +595,9 @@ void kernel_main(uint32_t r0, uint32_t model_id, void *atags) {
     MMU::init_page_table();
     MMU::init();
     FPU::init();
-    SMP::init();
-
-    for (int i = 0; i < 10; ++i) {
-	puts("counts = ");
-	put_uint32(SMP::count[1]);
-	putc(' ');
-	put_uint32(SMP::count[2]);
-	putc(' ');
-	put_uint32(SMP::count[3]);
-	putc('\n');
-	blink(panic_delay);
-    }
+    SMP::start_core(1, mandeld, (void *)1);
+    SMP::start_core(2, mandeld, (void *)2);
+    SMP::start_core(3, mandeld, (void *)3);
 
     /*
     puts("mapping and cleaning memory");
